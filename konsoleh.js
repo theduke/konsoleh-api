@@ -15,7 +15,6 @@ var log = function() {
 var kh = {
 
   baseUrl: "https://konsoleh.your-server.de",
-  jqueryUrl: 'https://ajax.googleapis.com/ajax/libs/jquery/1.8.3/jquery.min.js',
 
   /* Gets overridden by parseSystemArgs() */
   settings: {
@@ -26,16 +25,14 @@ var kh = {
     params: []
   },
 
-  urlHistory: [],
-
   page: null,
 
-  nextCallback: null,
-  lastCallbackUrl: null,
-
-  pageJobQueue: [],
-
   data: {},
+
+  lastCallbackUrl: null,
+  nextCallback: null,
+
+  jobQueue: [],
 
   init: function() {
     var that = this;
@@ -100,55 +97,90 @@ var kh = {
     this.settings = parsed;
   },
 
-  load: function(url, callback) {
+  addJob: function(url, callback, callbackParams, tag, prepend) {
+    var job = {
+      url: url,
+      callback: callback,
+      callbackParams: callbackParams,
+      tag: tag
+    };
+
+    if (prepend) {
+      this.jobQueue.unshift(job);
+    }
+    else {
+      this.jobQueue.push(job);
+    }
+  },
+
+  processJobQueue: function(tag) {
+    var job = null;
+
+    if (this.jobQueue.length > 0) {
+      if (tag) {
+        for (var key in this.jobQueue) {
+          if (this.jobQueue[key].tag === tag) {
+            job = this.jobQueue.splice(key, 1)[0];
+            break;
+          }
+        }
+      }
+      else {
+        job = this.jobQueue.shift();
+      }
+
+      if (job) {
+        this.load(job.url, job.callback, job.callbackParams);
+      }
+    }
+
+    return job;
+  },
+
+  load: function(url, callback, callbackParams) {
     var that = this;
-    this.urlHistory.push(url);
     this.page.open(this.baseUrl + '/' + url, function(status) {
-      that.onLoadFinished(status, url, callback);
+      that.onLoadFinished(status, url, callback, callbackParams);
     });
   },
 
-  onLoadFinished: function(status, targetUrl, callback) {
+  onLoadFinished: function(status, targetUrl, callback, callbackParams) {
     var that = this;
     if (status !== 'success') {
       log('Could not load ', this.request.url);
     }
     else {
-      this.page.includeJs(that.jqueryUrl, function() {
+      this.page.injectJs('jquery.js');
 
-        var url = that.currentUrl();
-        // Prevent double-calling of callback.
-        if (that.lastCallbackUrl === url) {
-          return;
+      var url = that.currentUrl();
+      // Prevent double-calling of callback.
+      if (that.lastCallbackUrl === url) {
+        return;
+      }
+      that.lastCallbackUrl = url;
+
+      if (that.nextCallback) {
+        callback = that.nextCallback;
+        that.nextCallback = null;
+      }
+
+      log('Loaded ', url);
+
+      if (callback) {
+        if (!callbackParams) {
+          callbackParams = [];
         }
-        that.lastCallbackUrl = url;
-
-        if (that.nextCallback) {
-          callback = that.nextCallback;
-          that.nextCallback = null;
-        }
-
-        if (!callback) {
-          switch (url) {
-            case 'frameset_home.php':
-              callback = 'onLogin';
-              break;
-            default:
-              break;
-          }
-        }
-
-        log('Loaded ', url);
-
-        if (callback && (callback in that)) {
-          //log('Calling callback ', callback);
-          that[callback]();
+        if (typeof callback === 'string' && (callback in that)) {
+          that[callback].apply(that, callbackParams);
           callback = null;
         }
-        else {
-          log("Could not determine callback");
+        else if (typeof callback === 'function') {
+          callback.apply(that, callbackParams);
         }
-      });
+        else {
+          log('Unknown callback format: ', callback);
+        }
+      }
     }
   },
 
@@ -188,155 +220,19 @@ var kh = {
       return;
     }
     else {
-      // Inject jquery in page.
-      var that = this;
-
-      if (!this.page.injectJs('./punycode.js')) {
-        log('Could not inject punycode.js');
-        phantom.exit();
-        return;
-      }
-
-      that.page.evaluate(function() {
-        window.khClient = {
-          leftFrame: null,
-          mainFrame: null,
-
-          pageRequests: {
-            left: null,
-            main: null
-          },
-
-          init: function() {
-            this.leftFrame = document.getElementsByName('leftFrame')[0];
-            this.mainFrame = document.getElementsByName('mainFrame')[0];
-
-            this.ensureJquery(function() {
-              callPhantom({
-                callback: 'onPageInitialized'
-              });
-            });
-          },
-
-          ensureJquery: function(callback) {
-            var script = '<script src="' + this.jqueryUrl + '" type="text/javascript"></script>';
-
-            if (!('jQuery' in this.leftFrame.contentWindow)) {
-              this.leftFrame.contentDocument.head.innerHTML += script;
-            }
-            if (!('jQuery' in this.mainFrame.contentWindow)) {
-              this.mainFrame.contentDocument.head.innerHTML += script;
-            }
-
-            this.onJqueryWait(callback);
-          },
-
-          onJqueryWait: function(callback) {
-            var left = 'jQuery' in this.leftFrame.contentWindow;
-            var main = 'jQuery' in this.mainFrame.contentWindow;
-
-            if (!(left && main)) {
-              var that = this;
-              setTimeout(function() {
-                that.onJqueryWait(callback);
-              });
-            }
-            else {
-              callback();
-            }
-          },
-
-          openInFrame: function(frame, url, callback, callbackData) {
-            if (!callbackData || typeof callbackData !== 'object') {
-              callbackData = {};
-            }
-            console.log(callbackData.callback);
-            callbackData.callback = callback;
-
-            var that = this;
-            $(frame).unbind('load').load(function() {
-              that.ensureJquery(function() {
-                callPhantom(callbackData);
-              });
-            });
-            frame.contentWindow.location = url;
-          },
-
-          openInLeftAndMain: function(urlLeft, urlMain, callback, callbackData) {
-            if (typeof callbackData !== 'object') {
-              callbackData = {};
-            }
-            callbackData.callback = callback;
-
-            var that = this;
-            $(this.leftFrame).unbind('load').load(function() {
-              console.log('Loaded LEFT');
-              $(that.mainFrame).unbind('load').load(function() {
-                console.log('Loaded MAIN');
-                that.ensureJquery(function() {
-                  callPhantom(callbackData);
-                });
-              });
-              that.mainFrame.contentWindow.location = urlMain;
-            });
-            this.leftFrame.contentWindow.location = urlLeft;
-          },
-
-          openInLeft: function(url, callback, callbackData) {
-            this.openInFrame(this.leftFrame, url, callback, callbackData);
-          },
-
-          openInMain: function(url, callback, callbackData) {
-            console.log('OPENING IN MAIN');
-            this.openInFrame(this.mainFrame, url, callback, callbackData);
-          }
-        };
-        khClient.init();
-      });
+      this.page.injectJs('./punycode.js');
+      this.runCmd();
     }
-  },
-
-  onPageInitialized: function() {
-    this.runCmd(this.settings.cmd, this.settings.params);
   },
 
   runCmd: function(cmd, params) {
-    this[cmd].apply(this, params);
-  },
-
-  frameEval: function() {
-
-  },
-
-  runOnPage: function(leftFrame, mainFrame, callback, callbackData) {
-    this.page.evaluate(function(leftFrame, mainFrame, callback, callbackData) {
-      if (leftFrame && mainFrame) {
-        khClient.openInLeftAndMain(leftFrame, mainFrame, callback, callbackData);
-      }
-      else if (leftFrame) {
-        khClient.openInLeft(leftFrame, callback, callbackData);
-      }
-      else if (mainFrame) {
-        khClient.openInMain(mainFrame, callback, callbackData);
-      }
-    }, leftFrame, mainFrame, callback, callbackData);
-  },
-
-  processJobQueue: function() {
-    if (this.pageJobQueue.length > 0) {
-      var job = this.pageJobQueue.shift();
-
-      this.runOnPage(job.leftFrame, job.mainFrame, job.callback, job.callbackData);
+    if (!cmd) {
+      cmd = this.settings.cmd;
     }
-  },
-
-  addJob: function(leftFrame, mainFrame, callback, callbackData) {
-    this.pageJobQueue.push({
-      leftFrame: leftFrame,
-      mainFrame: mainFrame,
-      callback: callback,
-      callbackData: callbackData
-    });
+    if (!params) {
+      params = this.settings.params;
+    }
+    this[cmd].apply(this, params);
   },
 
   /**
@@ -344,21 +240,20 @@ var kh = {
    */
 
   get_data: function() {
-    log('Getting data');
+    log('Getting all data');
 
-    // First, the domains
-    this.runOnPage(null, '/frame_center.php', 'getDomainList', null);
+    this.load('frame_center.php', 'getDomainList');
   },
 
   getDomainList: function() {
-    this.data.domains = this.page.evaluate(function() {
-      var jq = window.khClient.mainFrame.contentWindow.jQuery;
+    this.page.injectJs('punycode.js');
 
+    this.data.domains = this.page.evaluate(function() {
       var domains = {};
       var parent = null;
 
-      jq('#ui-accordion-domainlist-panel-0 dt').each(function(index, item) {
-        var $item = jq(item);
+      $('#ui-accordion-domainlist-panel-0 dt').each(function(index, item) {
+        var $item = $(item);
 
         // Skip deleted.
         if ($item.hasClass('deleted')) {
@@ -395,19 +290,182 @@ var kh = {
       return domains;
     });
 
-    log('Got domain data: ');
-
     for (var name in this.data.domains) {
       var domain = this.data.domains[name];
-      this.addJob(domain.path, '/ftp.php?', 'getDomainData', {domain: name});
+      this.addJob(domain.path, 'getDomainData', [name], 'domain');
     }
 
-    this.processJobQueue();
+    this.processJobQueue('domain');
   },
 
-  getDomainData: function(data) {
-    var domain = this.data.domains[data.domain];
-    log('Getting data for domain: ', domain);
+  getDomainData: function(name, step) {
+    var domain = this.data.domains[name];
+
+    var finished = false;
+
+    if (!step) {
+      log('Getting data for domain: ', name);
+      this.load('ftp.php?', 'getDomainData', [name, 'ftp']);
+    }
+    else if (step === 'ftp') {
+      domain.ftp = this.page.evaluate(function() {
+        var ftp = {};
+
+        $('form[action="ftp.php"]').each(function(index, item) {
+          var form = $(item);
+
+          var name = form.find('input[name=username]').val();
+          var password = form.find('input[name=password]').val();
+          var path = form.find('input[name=homedir]').val();
+
+          if (name && password && path) {
+            ftp[name] = {
+              path: path,
+              password: password
+            };
+          }
+          else {
+            console.log('Could not parse: ', form);
+          }
+        });
+
+        return ftp;
+      });
+
+      this.load('mysql.php', 'getDomainData', [name, 'mysql']);
+    }
+    else if (step === 'mysql' || step==='postgresql') {
+      var dbs = this.page.evaluate(function() {
+        var dbs = [];
+
+        $('input[name="Features_used_Number"]').each(function(index, item) {
+          dbs.push($(item).val());
+        });
+
+        return dbs;
+      });
+
+      for (var i = 0; i < dbs.length; i++) {
+        this.addJob(
+          step + '.php?Features_used_Number=' + encodeURIComponent(dbs[i]) + '&' + step + 'action=edit',
+          'getDomainData',
+          [name, 'parse_db_' + step],
+          'parse_db',
+          true
+        );
+      }
+
+      domain.databases = {
+        mysql: {},
+        postgresql: {}
+      };
+
+      if (step === 'mysql') {
+        this.load('postgresql.php', 'getDomainData', [name, 'postgresql']);
+      }
+      else {
+        // Add one final job that goes to next step.
+        this.addJob(
+          'dns_shared.php?dnsaction=dns',
+          'getDomainData',
+          [name, 'dns'],
+          'parse_db'
+        );
+        this.processJobQueue('parse_db');
+      }
+    }
+    else if (step === 'parse_db_mysql' || step === 'parse_db_postgresql') {
+      var db = this.page.evaluate(function() {
+        var db = {
+          database: $('input[name=dbname]').val(),
+          user: $('input[name=dbuser]').val(),
+          password: $('input[name=passfull]').val(),
+          host: $('input[name=server2]').val()
+        };
+
+        return db;
+      });
+
+      if (!(db.database && db.user && db.password && db.host)) {
+        log('Could not parse database data');
+      }
+      else {
+        var type = step.replace('parse_db_', '');
+        domain.databases[type][db.database] = db;
+
+        this.processJobQueue('parse_db');
+      }
+    }
+    else if (step === 'dns') {
+      log('Getting DNS');
+
+      var records = this.page.evaluate(function() {
+        var records = [];
+        $('tr').each(function(index, item) {
+          var $item = $(item);
+          if ($item.find('input[name=hostname]').size() < 0) return;
+
+          var record = {
+            hostname: $item.find('input[name=hostname]').val(),
+            ttl: $item.find('input[name=ttl]').val(),
+            type: $item.find('select[name=dnsoptions]').val(),
+            destination: $item.find('input[name=destination]').val(),
+          }
+          if (record.hostname && record.type && record.destination) {
+            records.push(record);
+          }
+        });
+        return records;
+      });
+
+      domain.dns = records;
+
+      this.load('subdomain.php', 'getDomainData', [name, 'subdomains']);
+    }
+    else if (step === 'subdomains') {
+      var subdomains = this.page.evaluate(function() {
+        var subdomains = [];
+        $('tr').each(function(index, item) {
+          var $item = $(item);
+
+          var id = $item.find('input[name=feature_number]').val();
+          if (!id) return;
+
+          var dom = {
+            id: id,
+            path: $item.find('input[name="subdomain_path_fu[' + id + ']"]').val(),
+            domain: $item.find('td').eq(1).html(),
+          }
+          console.log(dom);
+          if (dom.id && dom.domain && dom.path) {
+            subdomains.push(dom);
+          }
+        });
+        return subdomains;
+      });
+
+      domain.subdomains = subdomains;
+
+      log('Finished getting data for domain ', name);
+
+      if (!this.processJobQueue('domain')) {
+        this.saveData();
+        log('Finished getting data.');
+        phantom.exit();
+      }
+    }
+    else {
+      log('Unknown step: ', step);
+    }
+  },
+
+  saveData: function() {
+    var fs = require('fs');
+    var path = fs.workingDirectory + fs.separator + 'konsoleh_' + this.settings.user + '.data.json';
+    var file = fs.open(path, 'w');
+    file.write(JSON.stringify(this.data));
+    file.flush();
+    file.close();
   }
 };
 
