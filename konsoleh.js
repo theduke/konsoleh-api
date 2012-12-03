@@ -285,6 +285,7 @@ var kh = {
           parent = name;
           domain.type = $item.next().children().first().html();
           domain.subdomains = {};
+          domain.name = name;
           domains[name] = domain;
         }
         else {
@@ -315,7 +316,7 @@ var kh = {
     }
     else if (step === 'ftp') {
       domain.ftp = this.page.evaluate(function() {
-        var ftp = {};
+        var ftp = [];
 
         $('form[action="ftp.php"]').each(function(index, item) {
           var form = $(item);
@@ -325,10 +326,11 @@ var kh = {
           var path = form.find('input[name=homedir]').val();
 
           if (name && password && path) {
-            ftp[name] = {
+            ftp.push({
+              name: name,
               path: path,
               password: password
-            };
+            });
           }
           else {
             console.log('Could not parse: ', form);
