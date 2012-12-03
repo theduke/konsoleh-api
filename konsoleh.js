@@ -59,7 +59,7 @@ var kh = {
     var args = system.args;
     log(args);
 
-    args = ['', 'get_data',  '--user', 'C0702608709', '--password', 'A8AN4Q7T'];
+    //args = ['', 'get_data',  '--user', 'C0702608709', '--password', 'A8AN4Q7T'];
 
     var parsed = {
       cmd: null,
@@ -245,6 +245,12 @@ var kh = {
     this.load('frame_center.php', 'getDomainList');
   },
 
+  on_get_data: function() {
+    log('Finished getting data.');
+    this.saveData();
+    phantom.exit();
+  },
+
   getDomainList: function() {
     this.page.injectJs('punycode.js');
 
@@ -403,14 +409,16 @@ var kh = {
         var records = [];
         $('tr').each(function(index, item) {
           var $item = $(item);
-          if ($item.find('input[name=hostname]').size() < 0) return;
+          if ($item.find('input[name=hostname]').size() < 0) {
+            return;
+          }
 
           var record = {
             hostname: $item.find('input[name=hostname]').val(),
             ttl: $item.find('input[name=ttl]').val(),
             type: $item.find('select[name=dnsoptions]').val(),
-            destination: $item.find('input[name=destination]').val(),
-          }
+            destination: $item.find('input[name=destination]').val()
+          };
           if (record.hostname && record.type && record.destination) {
             records.push(record);
           }
@@ -429,13 +437,15 @@ var kh = {
           var $item = $(item);
 
           var id = $item.find('input[name=feature_number]').val();
-          if (!id) return;
+          if (!id) {
+            return;
+          }
 
           var dom = {
             id: id,
             path: $item.find('input[name="subdomain_path_fu[' + id + ']"]').val(),
-            domain: $item.find('td').eq(1).html(),
-          }
+            domain: $item.find('td').eq(1).html()
+          };
           console.log(dom);
           if (dom.id && dom.domain && dom.path) {
             subdomains.push(dom);
@@ -449,9 +459,7 @@ var kh = {
       log('Finished getting data for domain ', name);
 
       if (!this.processJobQueue('domain')) {
-        this.saveData();
-        log('Finished getting data.');
-        phantom.exit();
+        this.on_get_data();
       }
     }
     else {
@@ -461,7 +469,11 @@ var kh = {
 
   saveData: function() {
     var fs = require('fs');
-    var path = fs.workingDirectory + fs.separator + 'konsoleh_' + this.settings.user + '.data.json';
+
+    var path = 'path' in this.settings ?
+      this.settings.path :
+      fs.workingDirectory + fs.separator + 'konsoleh_' + this.settings.user + '.data.json';
+
     var file = fs.open(path, 'w');
     file.write(JSON.stringify(this.data));
     file.flush();
