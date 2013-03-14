@@ -59,8 +59,6 @@ var kh = {
     var args = system.args;
     log(args);
 
-    //args = ['', 'get_data',  '--user', 'C0702608709', '--password', 'A8AN4Q7T'];
-
     var parsed = {
       cmd: null,
       params: []
@@ -244,6 +242,10 @@ var kh = {
 
     this.load('frame_center.php', 'getDomainList');
   },
+
+  /**
+   * --------------- END COMMAND FUNCTIONS ---------------
+   */
 
   on_get_data: function() {
     log('Finished getting data.');
